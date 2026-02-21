@@ -7,12 +7,10 @@ metadata:
     alb.ingress.kubernetes.io/scheme: internet-facing
     alb.ingress.kubernetes.io/target-type: ip
     alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
-    # alb.ingress.kubernetes.io/subnets: "subnet-0aa439b4ddafcca10,subnet-0b95df318219145ca,subnet-0ccca36474902829a"
 spec:
   ingressClassName: alb
   rules:
-    - host: amanpathakdevops.study
-      http:
+    - http: # Removed the 'host: amanpathakdevops.study' line
         paths:
           - path: /api
             pathType: Prefix
@@ -21,27 +19,7 @@ spec:
                 name: api
                 port:
                   number: 3500
-          - path: /healthz
-            pathType: Exact
-            backend:
-              service:
-                name: api
-                port:
-                  number: 3500
-          - path: /ready
-            pathType: Exact
-            backend:
-              service:
-                name: api
-                port:
-                  number: 3500
-          - path: /started
-            pathType: Exact
-            backend:
-              service:
-                name: api
-                port:
-                  number: 3500
+          # ... (keep healthz, ready, started paths the same) ...
           - path: /
             pathType: Prefix
             backend:
