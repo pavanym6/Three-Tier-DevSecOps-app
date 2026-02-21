@@ -1,0 +1,98 @@
+name: Backend DevSecOps Pipeline
+
+on:
+  workflow_dispatch: # Manual trigger only
+
+jobs:
+  backend-ci:
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: us-east-1
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }} 
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.MYGITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      # --- SAST STAGE ---
+      - name: SonarQube Scan
+        uses: sonarsource/sonarqube-scan-action@master
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        with:
+          projectBaseDir: Application-Code/backend
+          args: >
+            -Dsonar.projectKey=backend
+            -Dsonar.projectName=backend
+            -Dsonar.sources=.
+
+      # --- SCA STAGE (Filesystem) ---
+      - name: Trivy File Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: 'Application-Code/backend'
+          format: 'table'
+          severity: 'HIGH,CRITICAL'
+
+      # --- DOCKER & AWS STAGE ---
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and Push Docker Image
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPO2 }} # Note: Repo 2 for Backend
+          IMAGE_TAG: ${{ github.run_number }}
+        run: |
+          cd Application-Code/backend
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          echo "full_image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      # --- SCA STAGE (Image) ---
+      - name: Trivy Image Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.build-image.outputs.full_image }}
+          format: 'table'
+
+      # --- GITOPS STAGE ---
+      - name: Update Deployment Manifest
+        env:
+          FULL_IMAGE_NAME: ${{ steps.build-image.outputs.full_image }}
+          USER_EMAIL: ${{ secrets.GIT_EMAIL }}
+          USER_NAME: ${{ secrets.GIT_USERNAME }}
+        run: |
+          git config --global user.email "$USER_EMAIL"
+          git config --global user.name "$USER_NAME"
+
+          cd Kubernetes-Manifests-file/Backend
+          
+          # Replacement targeting the backend image specifically
+          sed -i "s|image: .*backend:.*|image: $FULL_IMAGE_NAME|g" deployment.yaml
+          
+          echo "Verifying image update in Backend deployment.yaml:"
+          grep "image:" deployment.yaml
+          
+          git add deployment.yaml
+          git commit -m "Update backend image to version $FULL_IMAGE_NAME"
+          git push origin HEAD:main
